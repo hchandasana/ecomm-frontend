@@ -1,1 +1,1 @@
-# ecomm-frontend
+# E-Commerce Frontend
