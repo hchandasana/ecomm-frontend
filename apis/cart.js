@@ -7,3 +7,7 @@ export function addOrUpdateCart(data) {
 export function getCart() {
     return apiClient.get("/cart");
 }
+
+export function updateCartStatus() {
+    return apiClient.put("/cart");
+}

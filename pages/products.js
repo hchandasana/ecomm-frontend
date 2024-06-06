@@ -3,11 +3,12 @@ import { Box, Button, Divider, IconButton, TextField, Typography } from "@mui/ma
 import CustomSnackbar from "components/snackbar";
 import { useMutation, useQuery } from "react-query";
 import { getProducts, searchProducts } from "apis/product";
-import { addOrUpdateCart, getCart } from "apis/cart";
+import { addOrUpdateCart, getCart, updateCartStatus } from "apis/cart";
 import { CancelOutlined, ControlPoint, RemoveCircleOutlineOutlined } from "@mui/icons-material";
 import { convertToRupees } from "@utils/index";
-import { createPayment } from "apis/payment";
+import { createPayment, updatePaymentStatus } from "apis/payment";
 import ProductCards from "components/productCards";
+import { addToShipment, updateShipmentStatus } from "apis/shipment";
 
 const Products = () => {
     const [products, setProducts] = useState([]);
@@ -17,6 +18,8 @@ const Products = () => {
     const [shipmentAddress, setShipmentAddress] = useState("");
     const [billingAddress, setBillingAddress] = useState("");
     const [qrCodeURL, setQrCodeURL] = useState("");
+    const [paymentId, setPaymentId] = useState("");
+    const [shipmentId, setShipmentId] = useState("");
 
     const [snackbar, setSnackbar] = useState({
         open: false,
@@ -31,9 +34,7 @@ const Products = () => {
 
     const { refetch: refetchProducts } = useQuery("getProducts", getProducts, {
         retry: false,
-        onSuccess: ({ data }) => {
-            setProducts(data);
-        },
+        onSuccess: ({ data }) => setProducts(data),
         onError: (error) => {
             setSnackbar({
                 open: true,
@@ -45,9 +46,7 @@ const Products = () => {
 
     const { refetch: refetchCart } = useQuery("getCart", getCart, {
         retry: false,
-        onSuccess: ({ data }) => {
-            setCart(data);
-        },
+        onSuccess: ({ data }) => setCart(data),
         onError: (error) => {
             setSnackbar({
                 open: true,
@@ -60,13 +59,8 @@ const Products = () => {
     const {
         mutateAsync: addOrUpdateCartAsync
     } = useMutation("addOrUpdateCart", addOrUpdateCart, {
-        onSuccess: ({ data }) => {
-            setSnackbar({
-                open: true,
-                message: data.message,
-                severity: "success",
-            });
-            refetchCart();
+        onSuccess: async () => {
+            await refetchCart();
         },
         onError: (error) => {
             setSnackbar({
@@ -82,6 +76,82 @@ const Products = () => {
     } = useMutation("searchProducts", searchProducts, {
         onSuccess: ({ data }) => {
             setProducts(data);
+        },
+        onError: (error) => {
+            setSnackbar({
+                open: true,
+                message: error.message,
+                severity: "error",
+            });
+        },
+    });
+
+    const {
+        mutateAsync: createPaymentMutate
+    } = useMutation("createPayment", createPayment, {
+        onSuccess: ({ data }) => {
+            setQrCodeURL(data?.qrCodeURL);
+            setPaymentId(data?.paymentId);
+        },
+        onError: (error) => {
+            setSnackbar({
+                open: true,
+                message: error.message,
+                severity: "error",
+            });
+        },
+    });
+
+    const {
+        mutateAsync: addToShipmentMutate
+    } = useMutation("addToShipment", addToShipment, {
+        onSuccess: async ({ data }) => {
+            setShipmentId(data?.shipmentId);
+            setShipmentAddress("");
+            setBillingAddress("");
+            await createPaymentMutate({
+                cartId: cart.find((item) => item.cartId),
+                amount: cartTotal,
+                paymentMethod: "UPI",
+            });
+        },
+        onError: (error) => {
+            setSnackbar({
+                open: true,
+                message: error.message,
+                severity: "error",
+            });
+        },
+    });
+
+    const {
+        mutateAsync: updateShipmentStatusMutate
+    } = useMutation("updateShipmentStatus", updateShipmentStatus, {
+        onSuccess: () => setShipmentId("")
+    });
+
+    const {
+        mutateAsync: updateCartStatusMutate
+    } = useMutation("updateCartStatus", updateCartStatus, {
+        onSuccess: async () => await refetchCart()
+    });
+
+    const {
+        mutateAsync: updatePaymentStatusMutate
+    } = useMutation("updatePaymentStatus", updatePaymentStatus, {
+        onSuccess: async () => {
+            await updateShipmentStatusMutate({
+                shipmentId,
+                status: "shipped"
+            });
+            await updateCartStatusMutate();
+            setQrCodeURL("");
+            setPaymentId("");
+            setSnackbar({
+                open: true,
+                message: "Your order has been placed successfully",
+                severity: "success",
+            });
         },
         onError: (error) => {
             setSnackbar({
@@ -115,19 +185,29 @@ const Products = () => {
         }
     };
 
-    const handleClearSearch = () => {
+    const handleClearSearch = async () => {
         setSearchQuery("");
-        refetchProducts();
+        await refetchProducts();
     };
 
     const handleCheckout = async () => {
         try {
-            const { data } = await createPayment({
+            await addToShipmentMutate({
                 cartId: cart.find((item) => item.cartId),
-                amount: cartTotal,
-                paymentMethod: "UPI",
+                address: shipmentAddress,
+                billingAddress,
+                products: cart
             });
-            setQrCodeURL(data?.qrCodeURL);
+        } catch (error) {
+            return error;
+        }
+    };
+
+    const handlePayment = async () => {
+        try {
+            await updatePaymentStatusMutate({
+                paymentId, status: "paid"
+            });
         } catch (error) {
             return error;
         }
@@ -180,132 +260,157 @@ const Products = () => {
                     </Box>}
             </Box>
             {cart.length > 0 &&
-                <Box
-                    display="flex" width="450px"
-                    mx={3} flexDirection="column"
-                >
-                    <Box>
+                (!!qrCodeURL ?
+                    <Box
+                        width="450px" mx={3}
+                        flexDirection="column"
+                    >
                         <Box component="h1">
-                            Cart Details
+                            Payment Details
                         </Box>
                         <Divider sx={{ mt: 1, mb: 2 }} />
-                        {cart.map((item, index) => (
-                            <Box key={index} display="flex">
-                                <Box
-                                    component="img"
-                                    src="/images/product.png"
-                                    alt="product"
-                                    width="75px"
-                                    height="auto"
-                                    maxHeight="75px"
-                                    mr={2}
-                                />
-                                <Box>
-                                    <Typography variant="body1" fontWeight={600}>
-                                        {item.productId?.name}
-                                    </Typography>
-                                    <Typography variant="body1">
-                                        {convertToRupees(item.productId?.price)}
-                                    </Typography>
-                                    <Box display="flex" alignItems="center">
-                                        <IconButton
-                                            onClick={() => {
-                                                if (item.quantity >= 1) {
-                                                    handleAddToCart(item.productId, true);
-                                                }
-                                            }}
-                                            disabled={item.quantity < 1}
-                                        >
-                                            <RemoveCircleOutlineOutlined fontSize="small" />
-                                        </IconButton>
-                                        <Typography variant="body1">
-                                            {item.quantity}
-                                        </Typography>
-                                        <IconButton
-                                            onClick={() => handleAddToCart(item.productId)}
-                                        >
-                                            <ControlPoint fontSize="small" />
-                                        </IconButton>
-                                    </Box>
-                                </Box>
-                            </Box>
-                        ))}
-                    </Box>
-                    <Box mt={5}>
-                        <Box display="flex" justifyContent="space-between">
-                            <Typography variant="h3">
-                                Cart Total
-                            </Typography>
-                            <Typography variant="h3">
-                                {convertToRupees(cartTotal)}
-                            </Typography>
-                        </Box>
-                        <Box display="flex" justifyContent="space-between">
-                            <Typography variant="h3">
-                                Tax
-                            </Typography>
-                            <Typography variant="h3">
-                                {convertToRupees(0)}
-                            </Typography>
-                        </Box>
-                        <Divider />
-                        <Box display="flex" justifyContent="space-between">
-                            <Typography variant="h3">
-                                Sub Total
-                            </Typography>
-                            <Typography variant="h3">
-                                {convertToRupees(cartTotal)}
-                            </Typography>
-                        </Box>
-                    </Box>
-                    <Box mt={5}>
-                        <Typography variant="h2">
-                            Shipment
-                        </Typography>
-                        <Divider sx={{ my: 2 }} />
-                        <Typography variant="h3">
-                            Shipment Address
-                        </Typography>
-                        <TextField
-                            placeholder="Enter shipment address"
-                            fullWidth
-                            multiline
-                            size="small"
-                            sx={{ my: 1 }}
-                            value={shipmentAddress}
-                            onChange={(e) => setShipmentAddress(e.target.value)}
-                        />
-                        <Typography variant="h3">
-                            Billing Address
-                        </Typography>
-                        <TextField
-                            placeholder="Enter billing address"
-                            fullWidth
-                            multiline
-                            size="small"
-                            sx={{ my: 1 }}
-                            value={billingAddress}
-                            onChange={(e) => setBillingAddress(e.target.value)}
-                        />
-                        <Button
-                            variant="contained"
-                            color="primary"
-                            fullWidth
-                            sx={{ my: 2 }}
-                            onClick={handleCheckout}
-                        >
-                            Proceed to checkout
-                        </Button>
-                        {qrCodeURL && <Box
+                        <Box
                             component="img"
                             src={qrCodeURL}
-                            alt="qr-code"
+                            alt="qrCode"
                             width="100%"
                             height="auto"
-                            maxHeight="200px"
-                        />}
-                    </Box>
-                </Box>}
+                            maxHeight="300px"
+                        />
+                        <Box display="flex" justifyContent="space-around">
+                            <Button
+                                variant="outlined"
+                                onClick={() => setQrCodeURL("")}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="contained"
+                                onClick={handlePayment}
+                            >
+                                Done
+                            </Button>
+                        </Box>
+                    </Box> :
+                    <Box
+                        display="flex" width="450px"
+                        mx={3} flexDirection="column"
+                    >
+                        <Box>
+                            <Box component="h1">
+                                Cart Details
+                            </Box>
+                            <Divider sx={{ mt: 1, mb: 2 }} />
+                            {cart.map((item, index) => (
+                                <Box key={index} display="flex">
+                                    <Box
+                                        component="img"
+                                        src="/images/product.png"
+                                        alt="product"
+                                        width="75px"
+                                        height="auto"
+                                        maxHeight="75px"
+                                        mr={2}
+                                    />
+                                    <Box>
+                                        <Typography variant="body1" fontWeight={600}>
+                                            {item.productId?.name}
+                                        </Typography>
+                                        <Typography variant="body1">
+                                            {convertToRupees(item.productId?.price)}
+                                        </Typography>
+                                        <Box display="flex" alignItems="center">
+                                            <IconButton
+                                                onClick={() => {
+                                                    if (item.quantity >= 1) {
+                                                        handleAddToCart(item.productId, true);
+                                                    }
+                                                }}
+                                                disabled={item.quantity < 1}
+                                            >
+                                                <RemoveCircleOutlineOutlined fontSize="small" />
+                                            </IconButton>
+                                            <Typography variant="body1">
+                                                {item.quantity}
+                                            </Typography>
+                                            <IconButton
+                                                onClick={() => handleAddToCart(item.productId)}
+                                            >
+                                                <ControlPoint fontSize="small" />
+                                            </IconButton>
+                                        </Box>
+                                    </Box>
+                                </Box>
+                            ))}
+                        </Box>
+                        <Box mt={5}>
+                            <Box display="flex" justifyContent="space-between">
+                                <Typography variant="h3">
+                                    Cart Total
+                                </Typography>
+                                <Typography variant="h3">
+                                    {convertToRupees(cartTotal)}
+                                </Typography>
+                            </Box>
+                            <Box display="flex" justifyContent="space-between">
+                                <Typography variant="h3">
+                                    Tax
+                                </Typography>
+                                <Typography variant="h3">
+                                    {convertToRupees(0)}
+                                </Typography>
+                            </Box>
+                            <Divider />
+                            <Box display="flex" justifyContent="space-between">
+                                <Typography variant="h3">
+                                    Sub Total
+                                </Typography>
+                                <Typography variant="h3">
+                                    {convertToRupees(cartTotal)}
+                                </Typography>
+                            </Box>
+                        </Box>
+                        <Box mt={5}>
+                            <Typography variant="h2">
+                                Shipment
+                            </Typography>
+                            <Divider sx={{ my: 2 }} />
+                            <Typography variant="h3">
+                                Shipment Address
+                            </Typography>
+                            <TextField
+                                placeholder="Enter shipment address"
+                                fullWidth
+                                multiline
+                                size="small"
+                                sx={{ my: 1 }}
+                                value={shipmentAddress}
+                                onChange={(e) => setShipmentAddress(e.target.value)}
+                            />
+                            <Typography variant="h3">
+                                Billing Address
+                            </Typography>
+                            <TextField
+                                placeholder="Enter billing address"
+                                fullWidth
+                                multiline
+                                size="small"
+                                sx={{ my: 1 }}
+                                value={billingAddress}
+                                onChange={(e) => setBillingAddress(e.target.value)}
+                            />
+                            <Button
+                                variant="contained"
+                                color="primary"
+                                fullWidth
+                                sx={{ my: 2 }}
+                                onClick={handleCheckout}
+                                disabled={!shipmentAddress || !billingAddress}
+                            >
+                                Proceed to checkout
+                            </Button>
+                        </Box>
+                    </Box>)}
         </Box>
 
         <CustomSnackbar
