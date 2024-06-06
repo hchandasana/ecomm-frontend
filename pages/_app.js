@@ -9,6 +9,7 @@ import CssBaseline from "@mui/material/CssBaseline";
 import theme from "components/materialTheme";
 import NavigationLoader from "components/navigationLoader";
 import { QueryClient, QueryClientProvider } from "react-query";
+import ErrorBoundary from "components/errorBoundary";
 
 function MyApp({ Component, pageProps: { ...pageProps } }) {
   const router = useRouter();
@@ -81,7 +82,9 @@ function MyApp({ Component, pageProps: { ...pageProps } }) {
       <CssBaseline />
       {loading && <NavigationLoader />}
       <QueryClientProvider client={queryClient}>
-        <Component {...pageProps} />
+        <ErrorBoundary>
+          <Component {...pageProps} />
+        </ErrorBoundary>
       </QueryClientProvider>
     </ThemeProvider>
   );
